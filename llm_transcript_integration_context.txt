@@ -1,0 +1,163 @@
+================================================================================
+  LLM TRANSCRIPTION SERVER — INTEGRATION GUIDE
+  SFUmedia Project | Generated: 2026-03-27
+================================================================================
+
+OVERVIEW
+--------
+The transcript pipeline is already wired on the SFU server and client side.
+When your inhouse LLM Transcription Server is ready, you only need to uncomment
+three blocks in one file: client/src/hooks/useTranscript.js
+
+The SFU server (server.js) does NOT need any changes.
+The UI (RoomPage.jsx) does NOT need any changes.
+
+
+WHAT EXISTS TODAY (WITHOUT LLM SERVER)
+---------------------------------------
+- Host clicks "Start Transcript" → MediaRecorder captures mic audio as
+  audio/webm;codecs=opus blobs every 3 seconds
+- Each blob creates a { status: 'pending', text: '' } segment in state
+- Segments are synced to the SFU server every 5 seconds (text only, no audio)
+- Host clicks "Stop Transcript" → SFU marks transcript as 'complete'
+- Participant opens Transcript panel → fetches completed transcript from SFU
+- REST: GET http://localhost:3001/transcript/:roomId → returns full transcript JSON
+
+Segments stay in 'pending' state (empty text) until the LLM server responds.
+The UI shows "[ waiting for transcript… ]" for pending segments.
+
+
+HOW TO WIRE IN THE LLM SERVER
+-------------------------------
+File: client/src/hooks/useTranscript.js
+
+Step 1 — Add the import at the top of the file (after existing imports):
+
+    import { io as llmIo } from 'socket.io-client';
+
+Step 2 — Uncomment the llmSocketRef:
+
+    const llmSocketRef = useRef(null);
+
+Step 3 — Uncomment INTEGRATION POINT A (inside startTranscription):
+
+    llmSocketRef.current = llmIo('http://YOUR_LLM_SERVER_HOST:PORT');
+
+    llmSocketRef.current.emit('startSession', { sessionId: roomId });
+
+    llmSocketRef.current.on('transcriptSegment', ({ text, startOffset, endOffset }) => {
+      segmentsRef.current = segmentsRef.current.map((s) =>
+        s.status === 'pending' && Math.abs(s.startOffset - startOffset) < 1.5
+          ? { ...s, text, endOffset, status: 'complete' }
+          : s
+      );
+      setSegments([...segmentsRef.current]);
+    });
+
+    llmSocketRef.current.on('connect_error', (err) => {
+      console.error('[LLM Server] Connection error:', err.message);
+    });
+
+Step 4 — Uncomment INTEGRATION POINT B (inside recorder.ondataavailable):
+
+    llmSocketRef.current?.emit('audioChunk', {
+      sessionId: roomId,
+      chunk: event.data,     // Blob — audio/webm;codecs=opus
+      startOffset,           // seconds from meeting start (float)
+    });
+
+Step 5 — Uncomment INTEGRATION POINT C (inside stopTranscription):
+
+    llmSocketRef.current?.emit('endSession', { sessionId: roomId });
+    llmSocketRef.current?.disconnect();
+    llmSocketRef.current = null;
+
+
+WHAT YOUR LLM SERVER MUST IMPLEMENT (Socket.IO)
+-------------------------------------------------
+Event it receives from the client:
+
+  'startSession'
+    payload: { sessionId: string }
+    action:  initialize a transcription session keyed by sessionId (= roomId)
+
+  'audioChunk'
+    payload: {
+      sessionId: string,
+      chunk: Blob,           // audio/webm;codecs=opus, ~3 second window
+      startOffset: number,   // seconds from session start (e.g. 6.02)
+    }
+    action:  decode audio, run STT model, emit 'transcriptSegment' back
+
+  'endSession'
+    payload: { sessionId: string }
+    action:  flush any buffered audio, clean up session
+
+
+Event it must emit back to the client:
+
+  'transcriptSegment'
+    payload: {
+      sessionId: string,
+      text: string,          // transcribed text for this chunk
+      startOffset: number,   // seconds from session start
+      endOffset: number,     // seconds from session start
+    }
+    timing:  emit as soon as a chunk is processed (streaming is fine)
+
+
+TRANSCRIPT DATA STRUCTURE (stored in SFU server memory)
+---------------------------------------------------------
+{
+  roomId: "A3F9B2C1",
+  meetingStart: 1711234567000,   // epoch ms
+  meetingEnd: 1711237890000,     // epoch ms, null while live
+  status: "live" | "complete",
+  segments: [
+    {
+      id: 1,
+      text: "Hello everyone, let's get started.",
+      startOffset: 0.00,          // seconds from meetingStart
+      endOffset: 3.21,
+      timestamp: 1711234567000,   // epoch ms of capture
+      status: "complete"          // pending | complete
+    },
+    ...
+  ],
+  fullText: "Hello everyone, let's get started. ..."
+}
+
+REST endpoint (available after status = 'complete'):
+  GET http://localhost:3001/transcript/:roomId
+
+
+AUDIO FORMAT DETAILS
+---------------------
+- Container:  WebM
+- Codec:      Opus (falls back to plain audio/webm if Opus unsupported)
+- Chunk size: ~3 seconds of audio per blob
+- Sample rate: browser default (usually 48000 Hz)
+- Channels:   1 (mono mic input)
+
+If your LLM server needs WAV or raw PCM instead of WebM/Opus, replace the
+MediaRecorder approach in useTranscript.js with an AudioWorklet that outputs
+Float32Array PCM chunks. Let the next session know this requirement.
+
+
+FUTURE: DATABASE STAGE
+------------------------
+When moving from in-memory to a database:
+- Replace the `transcripts` Map in server/src/server.js with DB read/write calls
+- The Map interface (get/set/has) maps cleanly to key-value stores (Redis) or
+  a simple Postgres table: (room_id PK, data JSONB, status TEXT)
+- No changes needed in the hook or UI
+
+
+SOCKET EVENTS SUMMARY (SFU server ↔ client)
+---------------------------------------------
+startTranscription  client→server  { roomId }
+syncTranscript      client→server  { roomId, segments[], fullText }
+endTranscription    client→server  { roomId }
+getTranscript       client→server  { roomId }  → callback(TranscriptRecord)
+
+================================================================================
