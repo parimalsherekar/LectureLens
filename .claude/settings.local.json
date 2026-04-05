@@ -12,7 +12,8 @@
       "Bash(taskkill /F /PID 2840 /PID 29484)",
       "Bash(cmd /c \"taskkill /F /PID 2840\")",
       "Bash(cmd /c \"taskkill /F /PID 29484\")",
-      "Bash(cmd /c \"taskkill /F /PID 2840 & taskkill /F /PID 29484\")"
+      "Bash(cmd /c \"taskkill /F /PID 2840 & taskkill /F /PID 29484\")",
+      "Bash(find c:UsersshereOneDriveDesktopSFUmedia -type f \\\\\\(-name *.md -o -name README* -o -name .gitignore \\\\\\))"
     ]
   }
 }

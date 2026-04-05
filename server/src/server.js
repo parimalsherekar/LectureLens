@@ -1,10 +1,18 @@
-const express = require('express');
-const http = require('http');
+require('dotenv').config();
+
+const express    = require('express');
+const http       = require('http');
 const { Server } = require('socket.io');
-const cors = require('cors');
+const cors       = require('cors');
 const { v4: uuidv4 } = require('uuid');
-const { createWorker } = require('./mediasoupWorker');
-const Room = require('./Room');
+
+const { createWorker }    = require('./mediasoupWorker');
+const Room                = require('./Room');
+const { connectDB }       = require('./db');
+const { authMiddleware, verifySocketToken } = require('./middleware/authMiddleware');
+const authRoutes          = require('./routes/auth');
+const Meeting             = require('./models/Meeting');
+const Transcript          = require('./models/Transcript');
 
 const PORT = process.env.PORT || 3001;
 
@@ -19,31 +27,83 @@ const io = new Server(httpServer, {
   cors: { origin: '*', methods: ['GET', 'POST'] },
 });
 
-// rooms: Map<roomId, Room>
+// rooms: Map<roomId, Room>  (in-memory mediasoup state, not persisted)
 const rooms = new Map();
-
-// transcripts: Map<roomId, TranscriptRecord>
-// TranscriptRecord = { roomId, meetingStart, meetingEnd, status, segments[], fullText }
-const transcripts = new Map();
 
 // ─── REST endpoints ──────────────────────────────────────────────────────────
 
-// Health check
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-// Get transcript for a room (available only after meeting ends)
-app.get('/transcript/:roomId', (req, res) => {
-  const record = transcripts.get(req.params.roomId);
-  if (!record) return res.status(404).json({ error: 'Transcript not found' });
-  if (record.status !== 'complete') {
-    return res.status(403).json({ error: 'Transcript not yet available — meeting still in progress' });
+app.use('/auth', authRoutes);
+
+// Get all meetings the logged-in user participated in
+app.get('/meetings', authMiddleware, async (req, res) => {
+  try {
+    const meetings = await Meeting.find({ participants: req.user.userId })
+      .populate('hostId', 'name email')
+      .sort({ createdAt: -1 });
+
+    const roomIds = meetings.map(m => m._id);
+    const transcripts = await Transcript.find(
+      { roomId: { $in: roomIds } },
+      'roomId status'
+    );
+    const transcriptMap = {};
+    transcripts.forEach(t => { transcriptMap[t.roomId] = t.status; });
+
+    const result = meetings.map(m => ({
+      roomId:           m._id,
+      host:             m.hostId,
+      isHost:           m.hostId._id.toString() === req.user.userId,
+      status:           m.status,
+      createdAt:        m.createdAt,
+      endedAt:          m.endedAt,
+      transcriptStatus: transcriptMap[m._id] || null,
+    }));
+
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-  res.json(record);
+});
+
+// Get transcript — requires auth + must have been a participant
+app.get('/transcript/:roomId', authMiddleware, async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const userId = req.user.userId;
+
+    const meeting = await Meeting.findOne({ _id: roomId, participants: userId });
+    if (!meeting) return res.status(403).json({ error: 'Access denied' });
+
+    const transcript = await Transcript.findOne({ roomId });
+    if (!transcript) return res.status(404).json({ error: 'Transcript not found' });
+    if (transcript.status !== 'complete')
+      return res.status(403).json({ error: 'Transcript not yet available — meeting still in progress' });
+
+    res.json(transcript);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Socket.IO auth middleware ────────────────────────────────────────────────
+
+io.use((socket, next) => {
+  const token = socket.handshake.auth.token;
+  if (!token) return next(new Error('Authentication required'));
+  try {
+    socket.user = verifySocketToken(token);
+    next();
+  } catch {
+    next(new Error('Invalid or expired token'));
+  }
 });
 
 // ─── mediasoup init ──────────────────────────────────────────────────────────
 
 async function bootstrap() {
+  await connectDB();
   await createWorker();
   console.log('[Server] mediasoup worker ready');
 
@@ -55,7 +115,7 @@ async function bootstrap() {
 // ─── Socket.IO signaling ─────────────────────────────────────────────────────
 
 io.on('connection', (socket) => {
-  console.log(`[Socket] Connected: ${socket.id}`);
+  console.log(`[Socket] Connected: ${socket.id} (user: ${socket.user.email})`);
 
   // Track which room this socket is in (for cleanup on disconnect)
   let currentRoomId = null;
@@ -64,7 +124,7 @@ io.on('connection', (socket) => {
 
   socket.on('createRoom', async (_data, callback) => {
     try {
-      const roomId = uuidv4().slice(0, 8).toUpperCase(); // short code e.g. "A3F9B2C1"
+      const roomId = uuidv4().slice(0, 8).toUpperCase();
       const room = await new Room(roomId).init();
       rooms.set(roomId, room);
 
@@ -72,7 +132,14 @@ io.on('connection', (socket) => {
       socket.join(roomId);
       currentRoomId = roomId;
 
-      console.log(`[Room ${roomId}] Created by host ${socket.id}`);
+      // Persist room and record host as participant
+      await Meeting.create({
+        _id:          roomId,
+        hostId:       socket.user.userId,
+        participants: [socket.user.userId],
+      });
+
+      console.log(`[Room ${roomId}] Created by host ${socket.user.email}`);
       callback({ roomId, rtpCapabilities: room.rtpCapabilities });
     } catch (err) {
       console.error('[createRoom] Error:', err);
@@ -91,10 +158,14 @@ io.on('connection', (socket) => {
       socket.join(roomId);
       currentRoomId = roomId;
 
-      // Let existing peers know someone joined
+      // Add participant to meeting (addToSet prevents duplicates on reconnect)
+      await Meeting.findByIdAndUpdate(roomId, {
+        $addToSet: { participants: socket.user.userId },
+      });
+
       socket.to(roomId).emit('peerJoined', { peerId: socket.id });
 
-      console.log(`[Room ${roomId}] Participant joined: ${socket.id}`);
+      console.log(`[Room ${roomId}] Participant joined: ${socket.user.email}`);
       callback({ rtpCapabilities: room.rtpCapabilities });
     } catch (err) {
       console.error('[joinRoom] Error:', err);
@@ -111,7 +182,6 @@ io.on('connection', (socket) => {
 
       const transportParams = await room.createWebRtcTransport(socket.id);
 
-      // Tag transport with direction so Room.consume() can find the recv one
       const peer = room.getPeer(socket.id);
       const transport = peer.transports.get(transportParams.id);
       transport.appData = { direction };
@@ -147,7 +217,6 @@ io.on('connection', (socket) => {
 
       const producerId = await room.produce(socket.id, transportId, kind, rtpParameters);
 
-      // Notify all other peers in the room that a new producer is available
       socket.to(currentRoomId).emit('newProducer', {
         producerId,
         kind,
@@ -176,7 +245,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // ── Resume consumer (client signals it's ready to receive) ──────────────
+  // ── Resume consumer ──────────────────────────────────────────────────────
 
   socket.on('resumeConsumer', async ({ consumerId }, callback) => {
     try {
@@ -195,7 +264,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // ── Get existing producers (when joining a room with active streams) ──────
+  // ── Get existing producers ────────────────────────────────────────────────
 
   socket.on('getProducers', (_data, callback) => {
     try {
@@ -210,53 +279,91 @@ io.on('connection', (socket) => {
     }
   });
 
-  // ── Transcript: host starts recording ───────────────────────────────
+  // ── Transcript: host starts recording ────────────────────────────────────
 
-  socket.on('startTranscription', ({ roomId }) => {
-    if (transcripts.has(roomId)) return; // already started
-    transcripts.set(roomId, {
-      roomId,
-      meetingStart: Date.now(),
-      meetingEnd: null,
-      status: 'live',
-      segments: [],
-      fullText: '',
-    });
-    console.log(`[Transcript ${roomId}] Started`);
-  });
+  socket.on('startTranscription', async ({ roomId }) => {
+    try {
+      const existing = await Transcript.findOne({ roomId });
+      if (existing) return;
 
-  // ── Transcript: host syncs text segments periodically ───────────────
-
-  socket.on('syncTranscript', ({ roomId, segments, fullText }) => {
-    const record = transcripts.get(roomId);
-    if (!record || record.status === 'complete') return;
-    record.segments = segments;
-    record.fullText = fullText || '';
-    console.log(`[Transcript ${roomId}] Synced — ${segments.length} segments`);
-  });
-
-  // ── Transcript: host ends the meeting, marks transcript complete ─────
-
-  socket.on('endTranscription', ({ roomId }) => {
-    const record = transcripts.get(roomId);
-    if (!record) return;
-    record.status = 'complete';
-    record.meetingEnd = Date.now();
-    console.log(`[Transcript ${roomId}] Complete — ${record.segments.length} segments`);
-  });
-
-  // ── Transcript: participant fetches post-meeting transcript ──────────
-
-  socket.on('getTranscript', ({ roomId }, callback) => {
-    const record = transcripts.get(roomId);
-    if (!record) return callback({ error: 'Transcript not found' });
-    if (record.status !== 'complete') {
-      return callback({ error: 'Transcript not yet available — meeting still in progress' });
+      await Transcript.create({
+        roomId,
+        meetingStart: Date.now(),
+        status: 'live',
+        segments: [],
+        fullText: '',
+      });
+      console.log(`[Transcript ${roomId}] Started`);
+    } catch (err) {
+      console.error('[startTranscription] Error:', err);
     }
-    callback(record);
   });
 
-  // ── Chat message ────────────────────────────────────────────────────
+  // ── Transcript: host syncs text segments periodically ────────────────────
+
+  socket.on('syncTranscript', async ({ roomId, segments, fullText }) => {
+    try {
+      await Transcript.findOneAndUpdate(
+        { roomId, status: 'live' },
+        { segments, fullText: fullText || '' }
+      );
+      console.log(`[Transcript ${roomId}] Synced — ${segments.length} segments`);
+    } catch (err) {
+      console.error('[syncTranscript] Error:', err);
+    }
+  });
+
+  // ── Transcript: host ends meeting, marks transcript complete ─────────────
+
+  socket.on('endTranscription', async ({ roomId }) => {
+    try {
+      const transcript = await Transcript.findOne({ roomId });
+      const completionSegment = {
+        id:          (transcript?.segments?.length ?? 0) + 1,
+        chunkIndex:  -1,
+        text:        '--- TRANSCRIPT COMPLETED ---',
+        startOffset: null,
+        endOffset:   null,
+        timestamp:   Date.now(),
+        status:      'complete',
+      };
+
+      await Transcript.findOneAndUpdate(
+        { roomId },
+        {
+          status:      'complete',
+          meetingEnd:  Date.now(),
+          fullText:    (transcript?.fullText ?? '') + '\n--- TRANSCRIPT COMPLETED ---',
+          $push:       { segments: completionSegment },
+        }
+      );
+      await Meeting.findByIdAndUpdate(roomId, { status: 'ended', endedAt: new Date() });
+      console.log(`[Transcript ${roomId}] Complete`);
+    } catch (err) {
+      console.error('[endTranscription] Error:', err);
+    }
+  });
+
+  // ── Transcript: fetch post-meeting transcript (auth + participant check) ──
+
+  socket.on('getTranscript', async ({ roomId }, callback) => {
+    try {
+      const meeting = await Meeting.findOne({ _id: roomId, participants: socket.user.userId });
+      if (!meeting) return callback({ error: 'Access denied' });
+
+      const transcript = await Transcript.findOne({ roomId });
+      if (!transcript) return callback({ error: 'Transcript not found' });
+      if (transcript.status !== 'complete')
+        return callback({ error: 'Transcript not yet available — meeting still in progress' });
+
+      callback(transcript.toObject());
+    } catch (err) {
+      console.error('[getTranscript] Error:', err);
+      callback({ error: err.message });
+    }
+  });
+
+  // ── Chat message ─────────────────────────────────────────────────────────
 
   socket.on('chatMessage', ({ message }, callback) => {
     try {
@@ -287,7 +394,6 @@ io.on('connection', (socket) => {
     room.removePeer(socket.id);
     socket.to(currentRoomId).emit('peerLeft', { peerId: socket.id });
 
-    // Clean up empty rooms
     if (room.isEmpty()) {
       rooms.delete(currentRoomId);
       console.log(`[Room ${currentRoomId}] Deleted (empty)`);
