@@ -86,14 +86,23 @@ export default function RoomPage() {
     <div style={styles.page}>
       {/* ── Header ────────────────────────────────────────────────── */}
       <div style={styles.header}>
-        <span style={styles.roomCode}>Room: {displayRoomId}</span>
+        {/* Brand */}
+        <span style={styles.brand}>
+          <span style={styles.brandDot} />
+          LectureLens
+        </span>
+
+        <span style={styles.headerDivider} />
+
+        <span style={styles.roomCode}>{displayRoomId}</span>
         <span style={styles.roleTag}>{role === 'host' ? 'Host' : 'Participant'}</span>
         <span style={styles.statusDot(status)} title={status} />
+
         <button onClick={toggleMic} style={styles.controlBtn(micEnabled)} title={micEnabled ? 'Mute mic' : 'Unmute mic'}>
-          {micEnabled ? '🎙️' : '🔇'}
+          {micEnabled ? 'Mic On' : 'Muted'}
         </button>
         <button onClick={toggleCamera} style={styles.controlBtn(cameraEnabled)} title={cameraEnabled ? 'Turn off camera' : 'Turn on camera'}>
-          {cameraEnabled ? '📷' : '🚫'}
+          {cameraEnabled ? 'Cam On' : 'Cam Off'}
         </button>
 
         {/* Transcript controls — host only */}
@@ -265,67 +274,99 @@ const styles = {
     display: 'flex',
     flexDirection: 'column',
     height: '100vh',
-    background: '#0f0f0f',
+    background: 'var(--surface-1)',
   },
   header: {
     display: 'flex',
     alignItems: 'center',
-    gap: '12px',
-    padding: '12px 20px',
-    background: '#1a1a1a',
-    borderBottom: '1px solid #2a2a2a',
+    gap: '10px',
+    padding: '10px 20px',
+    background: 'var(--surface-2)',
+    borderBottom: '1px solid var(--border)',
+    flexShrink: 0,
+  },
+  brand: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '7px',
+    fontWeight: 700,
+    fontSize: '16px',
+    color: 'var(--text)',
+    letterSpacing: '-0.01em',
+    flexShrink: 0,
+  },
+  brandDot: {
+    width: 8,
+    height: 8,
+    borderRadius: '50%',
+    background: 'var(--brand)',
+    flexShrink: 0,
+  },
+  headerDivider: {
+    width: '1px',
+    height: '20px',
+    background: 'var(--border)',
+    flexShrink: 0,
+    margin: '0 2px',
   },
   roomCode: {
     fontWeight: 600,
-    letterSpacing: '0.05em',
-    color: '#a0a0a0',
+    letterSpacing: '0.08em',
+    color: 'var(--text-muted)',
     fontFamily: 'monospace',
-    fontSize: '15px',
+    fontSize: '13px',
+    background: 'var(--surface-3)',
+    padding: '3px 8px',
+    borderRadius: '4px',
   },
   roleTag: {
-    background: '#3b82f6',
+    background: 'var(--brand)',
     color: '#fff',
     padding: '2px 10px',
     borderRadius: '999px',
-    fontSize: '12px',
+    fontSize: '11px',
     fontWeight: 600,
+    letterSpacing: '0.02em',
   },
   statusDot: (status) => ({
-    width: 10,
-    height: 10,
+    width: 8,
+    height: 8,
     borderRadius: '50%',
     background:
-      status === 'connected' ? '#22c55e'
-      : status === 'error' ? '#ef4444'
+      status === 'connected' ? 'var(--success)'
+      : status === 'error' ? 'var(--danger)'
       : '#facc15',
     flexShrink: 0,
   }),
   controlBtn: (active) => ({
-    background: active ? '#2a2a2a' : '#dc2626',
-    border: '1px solid #3a3a3a',
+    background: active ? 'var(--surface-3)' : 'var(--danger)',
+    border: '1px solid var(--border)',
     borderRadius: '6px',
-    padding: '6px 12px',
-    fontSize: '16px',
+    padding: '5px 12px',
+    fontSize: '12px',
     cursor: 'pointer',
     color: '#fff',
+    fontWeight: 600,
   }),
   leaveBtn: {
     marginLeft: 'auto',
-    background: '#dc2626',
-    padding: '6px 16px',
+    background: 'var(--danger)',
+    padding: '5px 14px',
     fontSize: '13px',
+    borderRadius: '6px',
   },
   errorBanner: {
     background: '#450a0a',
     color: '#fca5a5',
     padding: '10px 20px',
-    fontSize: '14px',
+    fontSize: '13px',
+    flexShrink: 0,
   },
   overlay: {
     textAlign: 'center',
     padding: '60px',
-    color: '#666',
-    fontSize: '16px',
+    color: 'var(--text-muted)',
+    fontSize: '15px',
   },
   main: {
     flex: 1,
@@ -344,10 +385,10 @@ const styles = {
   tile: {
     position: 'relative',
     width: '320px',
-    background: '#1a1a1a',
-    borderRadius: '10px',
+    background: 'var(--surface-2)',
+    borderRadius: '12px',
     overflow: 'hidden',
-    border: '1px solid #2a2a2a',
+    border: '1px solid var(--border)',
   },
   video: {
     width: '100%',
@@ -360,16 +401,17 @@ const styles = {
     position: 'absolute',
     bottom: '8px',
     left: '10px',
-    background: 'rgba(0,0,0,0.6)',
+    background: 'rgba(0,0,0,0.65)',
     color: '#fff',
-    fontSize: '12px',
+    fontSize: '11px',
     padding: '2px 8px',
     borderRadius: '4px',
+    fontWeight: 500,
   },
   waiting: {
-    color: '#555',
+    color: 'var(--text-muted)',
     padding: '40px',
-    fontSize: '15px',
+    fontSize: '14px',
     alignSelf: 'center',
   },
   // ── Chat ──────────────────────────────────────────────────────────
@@ -377,15 +419,17 @@ const styles = {
     width: '280px',
     display: 'flex',
     flexDirection: 'column',
-    background: '#1a1a1a',
-    borderLeft: '1px solid #2a2a2a',
+    background: 'var(--surface-2)',
+    borderLeft: '1px solid var(--border)',
   },
   chatHeader: {
     padding: '12px 16px',
     fontWeight: 600,
-    fontSize: '14px',
-    color: '#a0a0a0',
-    borderBottom: '1px solid #2a2a2a',
+    fontSize: '13px',
+    color: 'var(--text-muted)',
+    borderBottom: '1px solid var(--border)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.06em',
   },
   chatMessages: {
     flex: 1,
@@ -397,7 +441,7 @@ const styles = {
   },
   msgSelf: {
     alignSelf: 'flex-end',
-    background: '#3b82f6',
+    background: 'var(--brand)',
     color: '#fff',
     padding: '6px 10px',
     borderRadius: '12px 12px 2px 12px',
@@ -407,8 +451,8 @@ const styles = {
   },
   msgOther: {
     alignSelf: 'flex-start',
-    background: '#2a2a2a',
-    color: '#e0e0e0',
+    background: 'var(--surface-3)',
+    color: 'var(--text)',
     padding: '6px 10px',
     borderRadius: '12px 12px 12px 2px',
     maxWidth: '80%',
@@ -418,7 +462,7 @@ const styles = {
   msgPeer: {
     display: 'block',
     fontSize: '10px',
-    color: '#888',
+    color: 'var(--text-muted)',
     marginBottom: '2px',
   },
   msgText: {
@@ -428,20 +472,20 @@ const styles = {
     display: 'flex',
     gap: '6px',
     padding: '10px',
-    borderTop: '1px solid #2a2a2a',
+    borderTop: '1px solid var(--border)',
   },
   chatInput: {
     flex: 1,
-    background: '#2a2a2a',
-    border: '1px solid #3a3a3a',
+    background: 'var(--surface-3)',
+    border: '1px solid var(--border)',
     borderRadius: '6px',
     padding: '6px 10px',
-    color: '#fff',
+    color: 'var(--text)',
     fontSize: '13px',
     outline: 'none',
   },
   sendBtn: {
-    background: '#3b82f6',
+    background: 'var(--brand)',
     color: '#fff',
     border: 'none',
     borderRadius: '6px',
@@ -451,19 +495,20 @@ const styles = {
   },
   shareHint: {
     textAlign: 'center',
-    padding: '12px',
-    background: '#1a1a1a',
-    color: '#888',
-    fontSize: '14px',
-    borderTop: '1px solid #2a2a2a',
+    padding: '10px',
+    background: 'var(--surface-2)',
+    color: 'var(--text-muted)',
+    fontSize: '13px',
+    borderTop: '1px solid var(--border)',
+    flexShrink: 0,
   },
   // ── Transcript panel ────────────────────────────────────────────────
   transcriptBtn: (active) => ({
-    background: active ? '#dc2626' : '#16a34a',
+    background: active ? 'var(--danger)' : '#0d9488',
     border: 'none',
     borderRadius: '6px',
-    padding: '6px 14px',
-    fontSize: '13px',
+    padding: '5px 12px',
+    fontSize: '12px',
     cursor: 'pointer',
     color: '#fff',
     fontWeight: 600,
@@ -472,8 +517,8 @@ const styles = {
     width: '300px',
     display: 'flex',
     flexDirection: 'column',
-    background: '#141414',
-    borderLeft: '1px solid #2a2a2a',
+    background: 'var(--surface-1)',
+    borderLeft: '1px solid var(--border)',
   },
   transcriptHeader: {
     display: 'flex',
@@ -481,20 +526,22 @@ const styles = {
     gap: '8px',
     padding: '12px 16px',
     fontWeight: 600,
-    fontSize: '14px',
-    color: '#a0a0a0',
-    borderBottom: '1px solid #2a2a2a',
+    fontSize: '13px',
+    color: 'var(--text-muted)',
+    borderBottom: '1px solid var(--border)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.06em',
   },
   recordingDot: {
     width: 8,
     height: 8,
     borderRadius: '50%',
-    background: '#ef4444',
-    animation: 'pulse 1.5s infinite',
+    background: 'var(--danger)',
+    animation: 'pulse 1.5s ease-in-out infinite',
     flexShrink: 0,
   },
   completeBadge: {
-    background: '#16a34a',
+    background: '#0d9488',
     color: '#fff',
     fontSize: '10px',
     padding: '2px 7px',
@@ -510,10 +557,11 @@ const styles = {
     gap: '10px',
   },
   transcriptEmpty: {
-    color: '#555',
+    color: 'var(--text-muted)',
     fontSize: '13px',
     textAlign: 'center',
     marginTop: '20px',
+    lineHeight: 1.6,
   },
   segment: {
     display: 'flex',
@@ -522,17 +570,17 @@ const styles = {
   },
   segTime: {
     fontSize: '10px',
-    color: '#555',
+    color: 'var(--text-muted)',
     fontFamily: 'monospace',
   },
   segText: {
     fontSize: '13px',
-    color: '#e0e0e0',
-    lineHeight: 1.5,
+    color: 'var(--text)',
+    lineHeight: 1.6,
   },
   segPending: {
     fontSize: '13px',
-    color: '#555',
+    color: 'var(--text-muted)',
     fontStyle: 'italic',
   },
 };
