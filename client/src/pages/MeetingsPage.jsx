@@ -14,6 +14,7 @@ export default function MeetingsPage() {
 
   // roomId → { loading, data, error }
   const [transcripts, setTranscripts]   = useState({});
+  const [downloads, setDownloads]       = useState({});
 
   useEffect(() => {
     fetch(`${API}/meetings`, {
@@ -51,6 +52,40 @@ export default function MeetingsPage() {
     }
   }
 
+  async function downloadTranscript(roomId) {
+    setDownloads(d => ({ ...d, [roomId]: { loading: true } }));
+    try {
+      const res = await fetch(`${API}/transcript/${roomId}/download`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!res.ok) {
+        let message = 'Failed to download transcript';
+        try {
+          const data = await res.json();
+          message = data.error || message;
+        } catch {
+          // Keep the generic message when the server does not return JSON.
+        }
+        setDownloads(d => ({ ...d, [roomId]: { error: message } }));
+        return;
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `transcript-${roomId}.txt`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setDownloads(d => ({ ...d, [roomId]: { loading: false } }));
+    } catch {
+      setDownloads(d => ({ ...d, [roomId]: { error: 'Failed to download transcript' } }));
+    }
+  }
+
   return (
     <div style={s.page}>
       {/* Header */}
@@ -84,6 +119,7 @@ export default function MeetingsPage() {
         <div style={s.list}>
           {meetings.map(m => {
             const ts     = transcripts[m.roomId];
+            const dl     = downloads[m.roomId];
             const isOpen = !!ts?.data;
 
             return (
@@ -115,6 +151,7 @@ export default function MeetingsPage() {
                 {/* Transcript button */}
                 <div style={s.cardActions}>
                   {m.transcriptStatus === 'complete' ? (
+                    <>
                     <button
                       style={isOpen ? s.btnSecondary : s.btnPrimary}
                       onClick={() => fetchTranscript(m.roomId)}
@@ -125,6 +162,14 @@ export default function MeetingsPage() {
                         ? 'Hide Transcript'
                         : 'View Transcript'}
                     </button>
+                    <button
+                      style={s.btnSecondary}
+                      onClick={() => downloadTranscript(m.roomId)}
+                      disabled={dl?.loading}
+                    >
+                      {dl?.loading ? 'Downloading...' : 'Download TXT'}
+                    </button>
+                    </>
                   ) : (
                     <span style={s.noTranscript}>
                       {m.transcriptStatus === 'live'
@@ -136,6 +181,7 @@ export default function MeetingsPage() {
 
                 {/* Error */}
                 {ts?.error && <p style={s.errorText}>{ts.error}</p>}
+                {dl?.error && <p style={s.errorText}>{dl.error}</p>}
 
                 {/* Transcript viewer */}
                 {isOpen && (

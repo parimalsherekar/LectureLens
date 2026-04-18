@@ -30,6 +30,37 @@ const io = new Server(httpServer, {
 // rooms: Map<roomId, Room>  (in-memory mediasoup state, not persisted)
 const rooms = new Map();
 
+function formatTranscriptText(transcript) {
+  const header = [
+    `Room: ${transcript.roomId}`,
+    transcript.meetingStart ? `Started: ${new Date(transcript.meetingStart).toISOString()}` : null,
+    transcript.meetingEnd ? `Ended: ${new Date(transcript.meetingEnd).toISOString()}` : null,
+    '',
+  ].filter(line => line !== null);
+
+  const body = transcript.fullText?.trim()
+    || transcript.segments
+      .filter(seg => seg?.text && seg.text !== '--- TRANSCRIPT COMPLETED ---')
+      .map(seg => {
+        const time = seg.startOffset == null ? '' : `[${formatOffset(seg.startOffset)}] `;
+        return `${time}${seg.text}`;
+      })
+      .join('\n');
+
+  return `${header.join('\n')}${body || 'No transcript text available.'}\n`;
+}
+
+function formatOffset(seconds) {
+  const totalSeconds = Math.max(0, Math.floor(Number(seconds) || 0));
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainingSeconds = String(totalSeconds % 60).padStart(2, '0');
+  return `${minutes}:${remainingSeconds}`;
+}
+
+function transcriptFileName(roomId) {
+  return `transcript-${String(roomId).replace(/[^a-zA-Z0-9_-]/g, '_')}.txt`;
+}
+
 // ─── REST endpoints ──────────────────────────────────────────────────────────
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
@@ -82,6 +113,28 @@ app.get('/transcript/:roomId', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'Transcript not yet available — meeting still in progress' });
 
     res.json(transcript);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Download transcript as a .txt file — requires auth + must have been a participant
+app.get('/transcript/:roomId/download', authMiddleware, async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const userId = req.user.userId;
+
+    const meeting = await Meeting.findOne({ _id: roomId, participants: userId });
+    if (!meeting) return res.status(403).json({ error: 'Access denied' });
+
+    const transcript = await Transcript.findOne({ roomId });
+    if (!transcript) return res.status(404).json({ error: 'Transcript not found' });
+    if (transcript.status !== 'complete')
+      return res.status(403).json({ error: 'Transcript not yet available - meeting still in progress' });
+
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${transcriptFileName(roomId)}"`);
+    res.send(formatTranscriptText(transcript));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
