@@ -13,6 +13,7 @@ const { authMiddleware, verifySocketToken } = require('./middleware/authMiddlewa
 const authRoutes          = require('./routes/auth');
 const Meeting             = require('./models/Meeting');
 const Transcript          = require('./models/Transcript');
+const { askGeminiAboutTranscript } = require('./gemini');
 
 const PORT = process.env.PORT || 3001;
 
@@ -215,6 +216,44 @@ app.get('/transcript/:roomId/download', authMiddleware, async (req, res) => {
     res.send(formatTranscriptText(transcript));
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/meetings/:roomId/chatbot', authMiddleware, async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const userId = req.user.userId;
+    const { message, history } = req.body || {};
+
+    let meeting = await Meeting.findOne({ _id: roomId, participants: userId });
+    if (!meeting) return res.status(403).json({ error: 'Access denied' });
+
+    let transcript = await Transcript.findOne({ roomId });
+    meeting = await ensureMeetingEndedFromTranscript(meeting, transcript);
+    transcript = await ensureTranscriptCompletedForEndedMeeting(meeting, transcript);
+
+    if (!transcript) {
+      return res.status(404).json({ error: 'Transcript not found' });
+    }
+
+    if (transcript.status !== 'completed') {
+      return res.status(403).json({ error: 'Transcript not yet available - meeting still in progress' });
+    }
+
+    const result = await askGeminiAboutTranscript({
+      transcript,
+      message,
+      history,
+    });
+
+    res.json({
+      roomId,
+      answer: result.answer,
+      model: result.model,
+    });
+  } catch (err) {
+    const statusCode = err.statusCode || 500;
+    res.status(statusCode).json({ error: err.message });
   }
 });
 

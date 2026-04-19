@@ -4,6 +4,7 @@ import Home         from './pages/Home';
 import RoomPage     from './pages/RoomPage';
 import AuthPage     from './pages/AuthPage';
 import MeetingsPage from './pages/MeetingsPage';
+import MeetingChatbotPage from './pages/MeetingChatbotPage';
 import { useAuth } from './context/AuthContext';
 
 function ProtectedRoute({ children }) {
@@ -21,6 +22,7 @@ export default function App() {
       <Route path="/auth" element={user ? <Navigate to="/" replace /> : <AuthPage />} />
       <Route path="/" element={<ProtectedRoute><Home /></ProtectedRoute>} />
       <Route path="/meetings" element={<ProtectedRoute><MeetingsPage /></ProtectedRoute>} />
+      <Route path="/meetings/:roomId/chatbot" element={<ProtectedRoute><MeetingChatbotPage /></ProtectedRoute>} />
       <Route path="/room/:roomId" element={<ProtectedRoute><RoomPage /></ProtectedRoute>} />
     </Routes>
   );

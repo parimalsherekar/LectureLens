@@ -1,0 +1,160 @@
+LectureLens Project Flow
+
+This project has 3 main parts:
+
+1. Client
+- React frontend
+- Host and participants join rooms here
+- Handles UI, local media, transcript panel, and transcript control buttons
+
+2. Main Server
+- Socket.IO + mediasoup backend
+- Creates rooms, manages meetings, handles transcript DB updates, and controls access
+
+3. LLM Transcript Server
+- Separate socket server running on http://localhost:4000
+- Receives audio chunks and converts them into transcript text
+
+
+Full Flow
+
+1. Meeting Start
+- RoomPage loads
+- useMediasoup.join() runs
+- If user is host, client emits createRoom
+- If user is participant, client emits joinRoom
+- Main server creates or joins the room
+- Main server stores meeting info in MongoDB Meeting collection
+- Client gets mic and camera using getUserMedia
+- Client creates mediasoup transports
+- Client starts sending audio/video
+
+Simple flow:
+RoomPage -> useMediasoup.join() -> main server room setup -> media starts
+
+
+2. Transcript Start
+- Only host can start transcript
+- Host clicks Start Transcript
+- startTranscription() runs in useTranscript.js
+- Client sets transcript UI state to live
+- Client emits startTranscription to main server
+- Main server creates or reopens transcript document in MongoDB
+- Client opens LLM socket session with startSession
+- Client starts MediaRecorder on host audio track
+
+Simple flow:
+Host -> startTranscription() -> main server creates transcript record -> LLM session starts
+
+
+3. Audio to Transcript
+- MediaRecorder records host audio in chunks
+- Each chunk triggers ondataavailable
+- Client sends chunk to LLM transcript server using audioChunk
+- LLM transcript server processes speech and sends back transcriptSegment
+- Client receives transcriptSegment
+- Client replaces placeholder segment with real text
+- Client updates transcript state
+- Client syncs transcript to main server
+
+Simple flow:
+Host mic -> MediaRecorder -> audioChunk -> LLM server -> transcriptSegment -> client state update
+
+
+4. Who Updates Database
+- LLM transcript server generates transcript text
+- Client receives transcript text
+- Main server writes transcript data to MongoDB
+
+Database updates happen in 3 places:
+
+1. Start transcript
+- Main server creates transcript document
+- Status becomes live
+
+2. Sync transcript
+- Client emits syncTranscript
+- Main server writes segments and fullText into MongoDB
+
+3. Finalize transcript
+- Main server marks transcript as completed
+- Main server marks meeting as ended
+- meetingEnd and endedAt are stored
+
+Simple flow:
+LLM server generates text -> client forwards sync -> main server updates DB
+
+
+5. Stop Transcript
+- Host clicks Stop Transcript
+- Recording stops
+- No more audio chunks are sent
+- Pending transcript responses are waited for
+- Latest transcript is synced to DB
+- LLM session stays alive
+
+Important:
+Stop Transcript does not end the LLM session.
+It only stops sending audio.
+
+
+6. Host Leaves Room
+- Host clicks Leave
+- finalizeMeeting() runs
+- If recording is still active, it stops first
+- Client closes LLM session
+- Client emits finalizeMeeting to main server
+- Main server marks transcript completed
+- Main server marks meeting ended
+
+Important:
+The LLM session ends only when host leaves or finalizes the meeting.
+
+
+7. Participant Transcript Access
+- Participants do not generate transcript
+- They only read it
+- When participant opens transcript panel, fetchTranscript() runs
+- Client emits getTranscript
+- Main server checks if user belongs to that meeting
+- Main server returns transcript only after meeting is completed
+
+Simple flow:
+Participant -> fetchTranscript() -> main server access check -> transcript returned
+
+
+Overall One-Line Flow
+
+Host creates room -> main server stores meeting -> host media starts -> host starts transcript -> transcript record created -> audio chunks sent to LLM server -> LLM server returns transcript text -> client updates transcript -> client syncs transcript to main server -> main server stores transcript in DB -> host stops transcript to stop audio sending -> host leaves room -> LLM session ends -> main server marks meeting ended and transcript completed -> participants can read transcript
+
+
+Who Does What
+
+Host
+- Starts meeting
+- Starts transcript
+- Sends audio
+- Ends meeting
+
+Participant
+- Joins meeting
+- Watches/listens
+- Reads transcript after completion
+
+Client
+- Captures audio
+- Sends chunks
+- Receives transcript text
+- Syncs transcript to main server
+
+LLM Transcript Server
+- Converts audio to text
+
+Main Server
+- Manages rooms
+- Manages permissions
+- Stores meetings
+- Stores transcripts
+
+MongoDB
+- Stores Meeting and Transcript documents

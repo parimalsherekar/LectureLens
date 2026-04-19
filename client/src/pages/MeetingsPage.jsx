@@ -86,6 +86,10 @@ export default function MeetingsPage() {
     }
   }
 
+  function openChatbot(roomId) {
+    navigate(`/meetings/${roomId}/chatbot`);
+  }
+
   return (
     <div style={s.page}>
       {/* Header */}
@@ -168,6 +172,12 @@ export default function MeetingsPage() {
                       disabled={dl?.loading}
                     >
                       {dl?.loading ? 'Downloading...' : 'Download TXT'}
+                    </button>
+                    <button
+                      style={s.btnSecondary}
+                      onClick={() => openChatbot(m.roomId)}
+                    >
+                      Chatbot
                     </button>
                     </>
                   ) : (
