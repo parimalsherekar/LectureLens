@@ -40,7 +40,7 @@ function formatTranscriptText(transcript) {
 
   const body = transcript.fullText?.trim()
     || transcript.segments
-      .filter(seg => seg?.text && seg.text !== '--- TRANSCRIPT COMPLETED ---')
+      .filter(seg => seg?.text)
       .map(seg => {
         const time = seg.startOffset == null ? '' : `[${formatOffset(seg.startOffset)}] `;
         return `${time}${seg.text}`;
@@ -61,6 +61,60 @@ function transcriptFileName(roomId) {
   return `transcript-${String(roomId).replace(/[^a-zA-Z0-9_-]/g, '_')}.txt`;
 }
 
+async function ensureTranscriptCompletedForEndedMeeting(meeting, transcript = null) {
+  if (!meeting || meeting.status !== 'ended') {
+    return transcript;
+  }
+
+  const existingTranscript = transcript || await Transcript.findOne({ roomId: meeting._id });
+  if (!existingTranscript || existingTranscript.status === 'completed') {
+    return existingTranscript;
+  }
+
+  const meetingEnd = meeting.endedAt
+    ? new Date(meeting.endedAt).getTime()
+    : Date.now();
+
+  await Transcript.updateOne(
+    { roomId: meeting._id, status: { $ne: 'completed' } },
+    {
+      $set: {
+        status: 'completed',
+        meetingEnd,
+      },
+    }
+  );
+
+  return Transcript.findOne({ roomId: meeting._id });
+}
+
+async function ensureMeetingEndedFromTranscript(meeting, transcript = null) {
+  if (!meeting) {
+    return meeting;
+  }
+
+  const existingTranscript = transcript || await Transcript.findOne({ roomId: meeting._id });
+  if (!existingTranscript || existingTranscript.status !== 'completed' || meeting.status === 'ended') {
+    return meeting;
+  }
+
+  const endedAt = existingTranscript.meetingEnd
+    ? new Date(existingTranscript.meetingEnd)
+    : new Date();
+
+  await Meeting.updateOne(
+    { _id: meeting._id, status: { $ne: 'ended' } },
+    {
+      $set: {
+        status: 'ended',
+        endedAt,
+      },
+    }
+  );
+
+  return Meeting.findById(meeting._id).populate('hostId', 'name email');
+}
+
 // ─── REST endpoints ──────────────────────────────────────────────────────────
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
@@ -75,14 +129,34 @@ app.get('/meetings', authMiddleware, async (req, res) => {
       .sort({ createdAt: -1 });
 
     const roomIds = meetings.map(m => m._id);
-    const transcripts = await Transcript.find(
+    let transcripts = await Transcript.find(
       { roomId: { $in: roomIds } },
       'roomId status'
+    );
+
+    await Promise.all(
+      meetings.map(async (meeting) => {
+        const transcript = transcripts.find((item) => item.roomId === meeting._id);
+        await ensureMeetingEndedFromTranscript(meeting, transcript);
+        const updatedTranscript = await ensureTranscriptCompletedForEndedMeeting(meeting, transcript);
+
+        if (!updatedTranscript || updatedTranscript === transcript) {
+          return;
+        }
+
+        transcripts = transcripts.map((item) =>
+          item.roomId === meeting._id ? updatedTranscript : item
+        );
+      })
     );
     const transcriptMap = {};
     transcripts.forEach(t => { transcriptMap[t.roomId] = t.status; });
 
-    const result = meetings.map(m => ({
+    const refreshedMeetings = await Promise.all(
+      meetings.map(async (meeting) => ensureMeetingEndedFromTranscript(meeting))
+    );
+
+    const result = refreshedMeetings.map(m => ({
       roomId:           m._id,
       host:             m.hostId,
       isHost:           m.hostId._id.toString() === req.user.userId,
@@ -104,12 +178,14 @@ app.get('/transcript/:roomId', authMiddleware, async (req, res) => {
     const { roomId } = req.params;
     const userId = req.user.userId;
 
-    const meeting = await Meeting.findOne({ _id: roomId, participants: userId });
+    let meeting = await Meeting.findOne({ _id: roomId, participants: userId });
     if (!meeting) return res.status(403).json({ error: 'Access denied' });
 
-    const transcript = await Transcript.findOne({ roomId });
+    let transcript = await Transcript.findOne({ roomId });
+    meeting = await ensureMeetingEndedFromTranscript(meeting, transcript);
+    transcript = await ensureTranscriptCompletedForEndedMeeting(meeting, transcript);
     if (!transcript) return res.status(404).json({ error: 'Transcript not found' });
-    if (transcript.status !== 'complete')
+    if (transcript.status !== 'completed')
       return res.status(403).json({ error: 'Transcript not yet available — meeting still in progress' });
 
     res.json(transcript);
@@ -124,12 +200,14 @@ app.get('/transcript/:roomId/download', authMiddleware, async (req, res) => {
     const { roomId } = req.params;
     const userId = req.user.userId;
 
-    const meeting = await Meeting.findOne({ _id: roomId, participants: userId });
+    let meeting = await Meeting.findOne({ _id: roomId, participants: userId });
     if (!meeting) return res.status(403).json({ error: 'Access denied' });
 
-    const transcript = await Transcript.findOne({ roomId });
+    let transcript = await Transcript.findOne({ roomId });
+    meeting = await ensureMeetingEndedFromTranscript(meeting, transcript);
+    transcript = await ensureTranscriptCompletedForEndedMeeting(meeting, transcript);
     if (!transcript) return res.status(404).json({ error: 'Transcript not found' });
-    if (transcript.status !== 'complete')
+    if (transcript.status !== 'completed')
       return res.status(403).json({ error: 'Transcript not yet available - meeting still in progress' });
 
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
@@ -172,6 +250,75 @@ io.on('connection', (socket) => {
 
   // Track which room this socket is in (for cleanup on disconnect)
   let currentRoomId = null;
+
+  const finalizeMeetingForRoom = async (roomId) => {
+    const meeting = await Meeting.findById(roomId);
+    if (!meeting) return { error: 'Meeting not found' };
+
+    const now = Date.now();
+
+    const transcriptResult = await Transcript.updateOne(
+      { roomId },
+      {
+        $set: {
+          status: 'completed',
+          meetingEnd: now,
+        },
+      }
+    );
+
+    const meetingResult = await Meeting.updateOne(
+      { _id: roomId },
+      {
+        $set: {
+          status: 'ended',
+          endedAt: new Date(now),
+        },
+      }
+    );
+
+    if (meetingResult.matchedCount === 0) {
+      return { error: `Meeting not found for room ${roomId}` };
+    }
+
+    console.log(
+      `[Meeting ${roomId}] finalize results: meeting matched=${meetingResult.matchedCount} modified=${meetingResult.modifiedCount}, transcript matched=${transcriptResult.matchedCount} modified=${transcriptResult.modifiedCount}`
+    );
+
+    return { ok: true, transcriptFound: transcriptResult.matchedCount > 0 };
+  };
+
+  const leaveCurrentRoom = async ({ finalizeIfHost = false } = {}) => {
+    if (!currentRoomId) {
+      return { ok: true, leftRoomId: null };
+    }
+
+    const roomId = currentRoomId;
+    const room = rooms.get(roomId);
+    if (!room) {
+      currentRoomId = null;
+      return { ok: true, leftRoomId: roomId };
+    }
+
+    const peer = room.getPeer(socket.id);
+    const wasHost = peer?.role === 'host';
+
+    if (finalizeIfHost && wasHost) {
+      await finalizeMeetingForRoom(roomId);
+    }
+
+    room.removePeer(socket.id);
+    socket.leave(roomId);
+    socket.to(roomId).emit('peerLeft', { peerId: socket.id });
+
+    if (room.isEmpty()) {
+      rooms.delete(roomId);
+      console.log(`[Room ${roomId}] Deleted (empty)`);
+    }
+
+    currentRoomId = null;
+    return { ok: true, leftRoomId: roomId, wasHost };
+  };
 
   // ── Create room (host only) ──────────────────────────────────────────────
 
@@ -337,7 +484,14 @@ io.on('connection', (socket) => {
   socket.on('startTranscription', async ({ roomId }) => {
     try {
       const existing = await Transcript.findOne({ roomId });
-      if (existing) return;
+      if (existing) {
+        if (existing.status === 'completed') return;
+        await Transcript.findOneAndUpdate(
+          { roomId },
+          { status: 'live', meetingEnd: null }
+        );
+        return;
+      }
 
       await Transcript.create({
         roomId,
@@ -366,34 +520,44 @@ io.on('connection', (socket) => {
     }
   });
 
-  // ── Transcript: host ends meeting, marks transcript complete ─────────────
+  // ── Transcript: host leaves meeting, marks transcript complete ───────────
 
-  socket.on('endTranscription', async ({ roomId }) => {
+  const finalizeMeeting = async ({ roomId }, callback) => {
     try {
-      const transcript = await Transcript.findOne({ roomId });
-      const completionSegment = {
-        id:          (transcript?.segments?.length ?? 0) + 1,
-        chunkIndex:  -1,
-        text:        '--- TRANSCRIPT COMPLETED ---',
-        startOffset: null,
-        endOffset:   null,
-        timestamp:   Date.now(),
-        status:      'complete',
-      };
+      const meeting = await Meeting.findById(roomId);
+      if (!meeting) {
+        callback?.({ error: 'Meeting not found' });
+        return;
+      }
 
-      await Transcript.findOneAndUpdate(
-        { roomId },
-        {
-          status:      'complete',
-          meetingEnd:  Date.now(),
-          fullText:    (transcript?.fullText ?? '') + '\n--- TRANSCRIPT COMPLETED ---',
-          $push:       { segments: completionSegment },
-        }
-      );
-      await Meeting.findByIdAndUpdate(roomId, { status: 'ended', endedAt: new Date() });
+      if (meeting.hostId.toString() !== socket.user.userId) {
+        callback?.({ error: 'Only the host can finalize the meeting' });
+        return;
+      }
+
+      const result = await finalizeMeetingForRoom(roomId);
+      if (result.error) {
+        callback?.(result);
+        return;
+      }
+
       console.log(`[Transcript ${roomId}] Complete`);
+      callback?.({ ok: true });
     } catch (err) {
-      console.error('[endTranscription] Error:', err);
+      console.error('[finalizeMeeting] Error:', err);
+      callback?.({ error: err.message });
+    }
+  };
+
+  socket.on('finalizeMeeting', finalizeMeeting);
+  socket.on('endTranscription', finalizeMeeting);
+  socket.on('leaveRoom', async (_data, callback) => {
+    try {
+      const result = await leaveCurrentRoom({ finalizeIfHost: true });
+      callback?.(result);
+    } catch (err) {
+      console.error('[leaveRoom] Error:', err);
+      callback?.({ error: err.message });
     }
   });
 
@@ -401,12 +565,14 @@ io.on('connection', (socket) => {
 
   socket.on('getTranscript', async ({ roomId }, callback) => {
     try {
-      const meeting = await Meeting.findOne({ _id: roomId, participants: socket.user.userId });
+      let meeting = await Meeting.findOne({ _id: roomId, participants: socket.user.userId });
       if (!meeting) return callback({ error: 'Access denied' });
 
-      const transcript = await Transcript.findOne({ roomId });
+      let transcript = await Transcript.findOne({ roomId });
+      meeting = await ensureMeetingEndedFromTranscript(meeting, transcript);
+      transcript = await ensureTranscriptCompletedForEndedMeeting(meeting, transcript);
       if (!transcript) return callback({ error: 'Transcript not found' });
-      if (transcript.status !== 'complete')
+      if (transcript.status !== 'completed')
         return callback({ error: 'Transcript not yet available — meeting still in progress' });
 
       callback(transcript.toObject());
@@ -437,19 +603,16 @@ io.on('connection', (socket) => {
 
   // ── Disconnect / cleanup ─────────────────────────────────────────────────
 
-  socket.on('disconnect', () => {
+  socket.on('disconnect', async () => {
     console.log(`[Socket] Disconnected: ${socket.id}`);
 
-    if (!currentRoomId) return;
-    const room = rooms.get(currentRoomId);
-    if (!room) return;
-
-    room.removePeer(socket.id);
-    socket.to(currentRoomId).emit('peerLeft', { peerId: socket.id });
-
-    if (room.isEmpty()) {
-      rooms.delete(currentRoomId);
-      console.log(`[Room ${currentRoomId}] Deleted (empty)`);
+    try {
+      const result = await leaveCurrentRoom({ finalizeIfHost: true });
+      if (result.wasHost && result.leftRoomId) {
+        console.log(`[Meeting ${result.leftRoomId}] Finalized on host disconnect`);
+      }
+    } catch (err) {
+      console.error('[disconnect finalizeMeeting] Error:', err);
     }
   });
 });

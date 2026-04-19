@@ -243,6 +243,22 @@ export function useMediasoup({ roomId: roomIdParam, role }) {
     socket.emit('chatMessage', { message: text });
   }, []);
 
+  const leaveRoom = useCallback(async () => {
+    localStreamRef.current?.getTracks().forEach((track) => track.stop());
+    sendTransportRef.current?.close();
+    recvTransportRef.current?.close();
+
+    if (socket.connected) {
+      await new Promise((resolve) => {
+        socket.emit('leaveRoom', {}, () => resolve());
+      });
+      socket.disconnect();
+    }
+
+    setRemoteStreams({});
+    setStatus('idle');
+  }, []);
+
   // ─── Real-time: new producer / peer left / chat ───────────────────────
 
   useEffect(() => {
@@ -296,6 +312,7 @@ export function useMediasoup({ roomId: roomIdParam, role }) {
     status,
     error,
     join,
+    leaveRoom,
     micEnabled,
     cameraEnabled,
     toggleMic,

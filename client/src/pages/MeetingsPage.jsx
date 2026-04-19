@@ -150,7 +150,7 @@ export default function MeetingsPage() {
 
                 {/* Transcript button */}
                 <div style={s.cardActions}>
-                  {m.transcriptStatus === 'complete' ? (
+                  {m.transcriptStatus === 'completed' ? (
                     <>
                     <button
                       style={isOpen ? s.btnSecondary : s.btnPrimary}

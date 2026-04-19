@@ -41,7 +41,7 @@ export default function RoomPage() {
   const role = searchParams.get('role') || 'participant';
 
   const { roomId, localStream, remoteStreams, messages, sendMessage, status, error, join,
-          micEnabled, cameraEnabled, toggleMic, toggleCamera } =
+          micEnabled, cameraEnabled, toggleMic, toggleCamera, leaveRoom } =
     useMediasoup({ roomId: roomIdParam, role });
 
   const {
@@ -50,6 +50,7 @@ export default function RoomPage() {
     transcriptStatus,
     startTranscription,
     stopTranscription,
+    finalizeMeeting,
     fetchTranscript,
   } = useTranscript({ roomId: roomId || roomIdParam, role, localStream });
 
@@ -77,6 +78,19 @@ export default function RoomPage() {
   const handleSend = () => {
     sendMessage(chatInput);
     setChatInput('');
+  };
+
+  const handleLeave = async () => {
+    if (role === 'host' && roomId) {
+      try {
+        await finalizeMeeting();
+      } catch (err) {
+        console.error('[RoomPage] Failed to finalize meeting:', err);
+      }
+    }
+
+    await leaveRoom();
+    navigate('/');
   };
 
   const remoteEntries = Object.entries(remoteStreams);
@@ -122,6 +136,7 @@ export default function RoomPage() {
 
         {/* Toggle transcript panel */}
         <button
+          type="button"
           onClick={() => {
             if (!showTranscript && role === 'participant') fetchTranscript();
             setShowTranscript((v) => !v);
@@ -132,7 +147,7 @@ export default function RoomPage() {
           Transcript
         </button>
 
-        <button onClick={() => navigate('/')} style={styles.leaveBtn}>
+        <button type="button" onClick={handleLeave} style={styles.leaveBtn}>
           Leave
         </button>
       </div>
@@ -183,13 +198,13 @@ export default function RoomPage() {
               {role === 'host' && isRecording && (
                 <span style={styles.recordingDot} title="Recording" />
               )}
-              {transcriptStatus === 'complete' && (
-                <span style={styles.completeBadge}>Complete</span>
+              {transcriptStatus === 'completed' && (
+                <span style={styles.completeBadge}>Completed</span>
               )}
             </div>
 
             <div style={styles.transcriptBody}>
-              {role === 'participant' && transcriptStatus !== 'complete' && segments.length === 0 && (
+              {role === 'participant' && transcriptStatus !== 'completed' && segments.length === 0 && (
                 <div style={styles.transcriptEmpty}>
                   Transcript will be available after the meeting ends.
                 </div>
