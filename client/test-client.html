@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Transcript Server — Test Client</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
+  :root {
+    --bg:#0c0c0d; --surface:#141416; --border:#232328; --muted:#3a3a42;
+    --subtle:#5a5a66; --text:#e2e2e8; --green:#00e5a0; --red:#ff4d6a;
+    --amber:#ffb340; --mono:'IBM Plex Mono',monospace; --sans:'IBM Plex Sans',sans-serif;
+  }
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);font-weight:300;
+    min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:48px 24px 80px}
+  header{width:100%;max-width:720px;margin-bottom:48px;display:flex;align-items:baseline;gap:16px}
+  header h1{font-family:var(--mono);font-size:13px;font-weight:400;letter-spacing:.12em;
+    text-transform:uppercase;color:var(--green)}
+  header span{font-family:var(--mono);font-size:11px;color:var(--subtle);letter-spacing:.06em}
+  .config{width:100%;max-width:720px;margin-bottom:32px;display:flex;gap:8px;align-items:center}
+  .config label{font-family:var(--mono);font-size:11px;color:var(--subtle);letter-spacing:.08em;white-space:nowrap}
+  .config input{flex:1;background:var(--surface);border:1px solid var(--border);border-radius:4px;
+    color:var(--text);font-family:var(--mono);font-size:12px;padding:8px 12px;outline:none;transition:border-color .15s}
+  .config input:focus{border-color:var(--muted)}
+  .mic-wrap{display:flex;flex-direction:column;align-items:center;gap:20px;margin-bottom:48px}
+  .mic-btn{position:relative;width:80px;height:80px;border-radius:50%;border:none;
+    background:var(--surface);cursor:pointer;outline:none;transition:background .2s;
+    display:flex;align-items:center;justify-content:center}
+  .mic-btn::before{content:'';position:absolute;inset:-1px;border-radius:50%;
+    border:1px solid var(--border);transition:border-color .2s,box-shadow .2s}
+  .mic-btn:hover::before{border-color:var(--muted)}
+  .mic-btn.recording{background:#0d1f17}
+  .mic-btn.recording::before{border-color:var(--green);
+    box-shadow:0 0 0 4px rgba(0,229,160,.06),0 0 24px rgba(0,229,160,.12)}
+  .mic-btn svg{transition:transform .2s}
+  .mic-btn:active svg{transform:scale(.9)}
+  .pulse-ring{position:absolute;inset:-12px;border-radius:50%;border:1px solid var(--green);
+    opacity:0;pointer-events:none}
+  .recording .pulse-ring{animation:pulse 2s ease-out infinite}
+  @keyframes pulse{0%{transform:scale(1);opacity:.4}100%{transform:scale(1.5);opacity:0}}
+  .mic-status{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--subtle);transition:color .2s}
+  .mic-status.recording{color:var(--green)}
+  .mic-status.error{color:var(--red)}
+  .waveform{display:flex;align-items:center;gap:3px;height:24px;opacity:0;transition:opacity .3s}
+  .waveform.active{opacity:1}
+  .bar{width:3px;border-radius:2px;background:var(--green);animation:wave 1.2s ease-in-out infinite;transform-origin:bottom}
+  .bar:nth-child(1){animation-delay:0s;height:8px}.bar:nth-child(2){animation-delay:.1s;height:14px}
+  .bar:nth-child(3){animation-delay:.2s;height:20px}.bar:nth-child(4){animation-delay:.3s;height:12px}
+  .bar:nth-child(5){animation-delay:.15s;height:18px}.bar:nth-child(6){animation-delay:.25s;height:10px}
+  .bar:nth-child(7){animation-delay:.05s;height:16px}
+  @keyframes wave{0%,100%{transform:scaleY(1)}50%{transform:scaleY(.3)}}
+  .transcript-wrap{width:100%;max-width:720px}
+  .transcript-meta{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+  .transcript-meta .label{font-family:var(--mono);font-size:11px;color:var(--subtle);
+    letter-spacing:.1em;text-transform:uppercase}
+  .transcript-meta .actions{display:flex;gap:8px}
+  .btn-ghost{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--subtle);background:none;border:1px solid var(--border);border-radius:3px;
+    padding:4px 10px;cursor:pointer;transition:color .15s,border-color .15s}
+  .btn-ghost:hover{color:var(--text);border-color:var(--muted)}
+  .transcript-box{background:var(--surface);border:1px solid var(--border);border-radius:6px;
+    min-height:320px;max-height:480px;overflow-y:auto;padding:24px;scroll-behavior:smooth}
+  .transcript-box::-webkit-scrollbar{width:4px}
+  .transcript-box::-webkit-scrollbar-track{background:transparent}
+  .transcript-box::-webkit-scrollbar-thumb{background:var(--muted);border-radius:2px}
+  .empty-state{height:100%;min-height:272px;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:10px}
+  .empty-state svg{opacity:.2}
+  .empty-state p{font-family:var(--mono);font-size:11px;letter-spacing:.08em;color:var(--subtle)}
+  .segment{display:flex;gap:16px;padding:10px 0;border-bottom:1px solid var(--border);animation:fadeIn .3s ease}
+  .segment:last-child{border-bottom:none}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+  .seg-time{font-family:var(--mono);font-size:11px;color:var(--subtle);white-space:nowrap;
+    padding-top:2px;min-width:52px;flex-shrink:0}
+  .seg-text{font-size:15px;line-height:1.6;color:var(--text);font-weight:300}
+  .seg-text.pending{color:var(--subtle);font-style:italic}
+  .seg-text.pending::after{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;
+    background:var(--amber);margin-left:8px;vertical-align:middle;animation:blink .8s ease-in-out infinite}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+  .statusbar{width:100%;max-width:720px;margin-top:16px;display:flex;align-items:center;
+    justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--subtle);letter-spacing:.06em}
+  .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--muted);
+    margin-right:6px;vertical-align:middle;transition:background .3s}
+  .dot.connected{background:var(--green)}.dot.error{background:var(--red)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Transcript Server</h1>
+  <span>live · large-v3-turbo</span>
+</header>
+<div class="config">
+  <label>SERVER</label>
+  <input type="text" id="serverUrl" value="http://localhost:4000" spellcheck="false">
+</div>
+<div class="mic-wrap">
+  <button class="mic-btn" id="micBtn">
+    <div class="pulse-ring"></div>
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="9" y="2" width="6" height="12" rx="3"/>
+      <path d="M5 10a7 7 0 0 0 14 0"/>
+      <line x1="12" y1="19" x2="12" y2="22"/>
+      <line x1="9" y1="22" x2="15" y2="22"/>
+    </svg>
+  </button>
+  <div class="waveform" id="waveform">
+    <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+    <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+    <div class="bar"></div>
+  </div>
+  <div class="mic-status" id="micStatus">idle</div>
+</div>
+<div class="transcript-wrap">
+  <div class="transcript-meta">
+    <span class="label">Transcript</span>
+    <div class="actions">
+      <button class="btn-ghost" id="copyBtn">Copy</button>
+      <button class="btn-ghost" id="clearBtn">Clear</button>
+    </div>
+  </div>
+  <div class="transcript-box" id="transcriptBox">
+    <div class="empty-state" id="emptyState">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="9" y="2" width="6" height="12" rx="3"/>
+        <path d="M5 10a7 7 0 0 0 14 0"/>
+        <line x1="12" y1="19" x2="12" y2="22"/>
+      </svg>
+      <p>Press the mic to begin</p>
+    </div>
+  </div>
+</div>
+<div class="statusbar">
+  <div><span class="dot" id="connDot"></span><span id="connLabel">not connected</span></div>
+  <div id="chunkCounter">0 chunks sent</div>
+</div>
+
+<script>
+  let socket=null, mediaRecorder=null, sessionId=null, sessionStart=null;
+  let isRecording=false, chunkCount=0;
+  // segments: { id, startOffset, text, status:'pending'|'complete' }
+  let segments=[], segId=0;
+
+  const micBtn        = document.getElementById('micBtn');
+  const micStatus     = document.getElementById('micStatus');
+  const waveform      = document.getElementById('waveform');
+  const transcriptBox = document.getElementById('transcriptBox');
+  const emptyState    = document.getElementById('emptyState');
+  const connDot       = document.getElementById('connDot');
+  const connLabel     = document.getElementById('connLabel');
+  const chunkCounter  = document.getElementById('chunkCounter');
+  const serverUrlInput= document.getElementById('serverUrl');
+  const copyBtn       = document.getElementById('copyBtn');
+  const clearBtn      = document.getElementById('clearBtn');
+
+  function connectSocket() {
+    const url = serverUrlInput.value.trim();
+    socket = io(url, { transports: ['websocket'] });
+    socket.on('connect', () => {
+      connDot.className='dot connected';
+      connLabel.textContent=`connected · ${url}`;
+    });
+    socket.on('disconnect', () => {
+      connDot.className='dot error';
+      connLabel.textContent='disconnected';
+    });
+    socket.on('connect_error', () => {
+      connDot.className='dot error';
+      connLabel.textContent='connection error — is the server running?';
+      setStatus('error','cannot connect');
+    });
+    socket.on('transcriptSegment', ({ sessionId: sid, text, startOffset }) => {
+      if (sid !== sessionId) return;
+      // Find the closest pending segment and complete it, or add new one
+      const pending = segments.find(s =>
+        s.status === 'pending' && Math.abs(s.startOffset - startOffset) < 4
+      );
+      if (pending) {
+        pending.text = text;
+        pending.status = 'complete';
+      } else {
+        segments.push({ id: ++segId, startOffset, text, status: 'complete' });
+        segments.sort((a, b) => a.startOffset - b.startOffset);
+      }
+      render();
+    });
+  }
+
+  function disconnectSocket() {
+    if (socket) { socket.disconnect(); socket=null; }
+    connDot.className='dot';
+    connLabel.textContent='not connected';
+  }
+
+  async function startRecording() {
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    } catch(e) {
+      setStatus('error','mic access denied'); return;
+    }
+    connectSocket();
+    await new Promise((res, rej) => {
+      if (socket.connected) return res();
+      const t = setTimeout(rej, 3000);
+      socket.once('connect', () => { clearTimeout(t); res(); });
+      socket.once('connect_error', () => { clearTimeout(t); rej(); });
+    }).catch(() => { stream.getTracks().forEach(t=>t.stop()); disconnectSocket(); return; });
+
+    sessionId    = 'test-' + Math.random().toString(36).slice(2,8).toUpperCase();
+    sessionStart = Date.now();
+    chunkCount   = 0;
+    segments     = [];
+    segId        = 0;
+    render();
+
+    socket.emit('startSession', { sessionId });
+
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus' : 'audio/webm';
+    mediaRecorder = new MediaRecorder(stream, { mimeType });
+
+    mediaRecorder.ondataavailable = (event) => {
+      if (!event.data || event.data.size < 100) return;
+      const startOffset = Math.max(0, (Date.now() - sessionStart) / 1000 - 3);
+
+      // Add a pending placeholder immediately so user sees activity
+      segments.push({ id: ++segId, startOffset, text: '', status: 'pending' });
+      segments.sort((a, b) => a.startOffset - b.startOffset);
+      render();
+
+      socket.emit('audioChunk', { sessionId, chunk: event.data, startOffset });
+      chunkCount++;
+      chunkCounter.textContent = `${chunkCount} chunk${chunkCount!==1?'s':''} sent`;
+    };
+
+    mediaRecorder.start(3000);
+    isRecording = true;
+    micBtn.classList.add('recording');
+    waveform.classList.add('active');
+    setStatus('recording','recording');
+  }
+
+  function stopRecording() {
+    if (mediaRecorder) {
+      mediaRecorder.stop();
+      mediaRecorder.stream.getTracks().forEach(t=>t.stop());
+      mediaRecorder = null;
+    }
+    if (socket && sessionId) socket.emit('endSession', { sessionId });
+    isRecording = false;
+    micBtn.classList.remove('recording');
+    waveform.classList.remove('active');
+    setStatus('','idle');
+  }
+
+  function setStatus(cls, text) {
+    micStatus.className = `mic-status ${cls}`;
+    micStatus.textContent = text;
+  }
+
+  function fmtTime(s) {
+    return `${Math.floor(s/60).toString().padStart(2,'0')}:${Math.floor(s%60).toString().padStart(2,'0')}`;
+  }
+
+  function render() {
+    emptyState.style.display = segments.length ? 'none' : 'flex';
+    transcriptBox.querySelectorAll('.segment').forEach(el=>el.remove());
+    for (const seg of segments) {
+      const el = document.createElement('div');
+      el.className = 'segment';
+      el.dataset.id = seg.id;
+      const t = document.createElement('div');
+      t.className = 'seg-time';
+      t.textContent = fmtTime(seg.startOffset);
+      const tx = document.createElement('div');
+      tx.className = `seg-text${seg.status==='pending'?' pending':''}`;
+      tx.textContent = seg.status==='pending' ? 'transcribing…' : seg.text;
+      el.appendChild(t); el.appendChild(tx);
+      transcriptBox.appendChild(el);
+    }
+    transcriptBox.scrollTop = transcriptBox.scrollHeight;
+  }
+
+  micBtn.addEventListener('click', () => {
+    if (isRecording) stopRecording();
+    else startRecording();
+  });
+  clearBtn.addEventListener('click', () => {
+    if (isRecording) return;
+    segments=[]; render();
+    chunkCount=0; chunkCounter.textContent='0 chunks sent';
+    disconnectSocket();
+  });
+  copyBtn.addEventListener('click', () => {
+    const text = segments.filter(s=>s.status==='complete')
+      .map(s=>`[${fmtTime(s.startOffset)}] ${s.text}`).join('\n');
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => {
+      copyBtn.textContent='Copied!';
+      setTimeout(()=>copyBtn.textContent='Copy',1500);
+    });
+  });
+</script>
+</body>
+</html>

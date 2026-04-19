@@ -1,0 +1,22 @@
+{
+  "name": "llm-transcript-server",
+  "version": "1.0.0",
+  "description": "Socket.IO transcription server — faster-whisper backend",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "socket.io": "^4.7.5",
+    "torch": "^0.2.7"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

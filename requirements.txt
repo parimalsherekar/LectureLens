@@ -1,0 +1,2 @@
+# faster-whisper — CTranslate2-based Whisper inference
+faster-whisper>=1.0.0
